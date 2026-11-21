@@ -5,7 +5,8 @@ const http = require('http'), fs = require('fs'), path = require('path'), crypto
 const APP = path.join(__dirname, '..', '..');
 const BANK = process.env.KGS_BANK || path.join(__dirname, '..', '..', 'private', 'pilgi-2026-1.json');
 const users = { 'husband@test.kr': { id: '11111111-1111-4111-8111-111111111111', pw: 'pass1234' }, 'other@test.kr': { id: '22222222-2222-4222-8222-222222222222', pw: 'pass1234' }, 'wife@test.kr': { id: '33333333-3333-4333-8333-333333333333', pw: 'pass1234' } };
-const members = { [users['husband@test.kr'].id]: 'learner', [users['wife@test.kr'].id]: 'editor' };
+const members = { [users['husband@test.kr'].id]: 'learner', [users['wife@test.kr'].id]: 'admin' };
+const labels = { [users['husband@test.kr'].id]: '남편', [users['wife@test.kr'].id]: '진영' };
 const db = { kgs_events: [], kgs_bank_keys: [] };
 const tokens = {};
 let clock = Date.now();
@@ -13,8 +14,8 @@ let failMode = false; // true면 기록 쓰기/읽기가 서버 오류로 실패
 const now = () => new Date(++clock).toISOString();
 
 function rowsFor(table, uid) {
-  if (table === 'kgs_events') return db.kgs_events.filter(r => r.user_id === uid);
-  if (table === 'kgs_members') return members[uid] ? [{ user_id: uid, role: members[uid] }] : [];
+  if (table === 'kgs_events') return db.kgs_events.filter(r => r.user_id === uid || (members[uid] === 'admin' && members[r.user_id] === 'learner'));
+  if (table === 'kgs_members') return Object.keys(members).filter(id => id === uid || members[uid] === 'admin').map(id => ({ user_id: id, role: members[id], label: labels[id] }));
   if (table === 'kgs_bank_keys') return members[uid] ? db.kgs_bank_keys : [];
   return [];
 }
@@ -40,7 +41,7 @@ function query(token, q) {
   }
   if (t === 'kgs_events' && (q.op === 'update' || q.op === 'delete')) return { data: [] }; // 정책 없음 → 0행
   if (t === 'kgs_bank_keys' && q.op === 'upsert') {
-    if (members[uid] !== 'editor') return { error: { message: 'row-level security (not editor)' } };
+    if (!['editor', 'admin'].includes(members[uid])) return { error: { message: 'row-level security (not editor)' } };
     for (const r of q.rows) { db.kgs_bank_keys = db.kgs_bank_keys.filter(x => x.item_id !== r.item_id); db.kgs_bank_keys.push(Object.assign({}, r, { updated_at: now(), updated_by: uid })); }
     return { data: null };
   }

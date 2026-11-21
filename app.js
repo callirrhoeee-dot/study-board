@@ -45,7 +45,7 @@
 
   // ---------- Supabase ----------
   const serverConfigured = () => !!(CFG.supabaseUrl && CFG.supabaseKey && window.supabase && window.supabase.createClient);
-  function makeApi(sb) {
+  function makeApi(sb, uid) {
     const netErr = e => Object.assign(new Error(e && e.message || String(e)), { offline: !online() });
     return {
       async insertEvents(rows) {
@@ -53,7 +53,8 @@
         if (error) throw netErr(error);
       },
       async fetchEvents(since, from, to) {
-        let q = sb.from('kgs_events').select('id,kind,item_id,data,client_at,device_id,created_at').order('created_at', { ascending: true }).order('id', { ascending: true }).range(from, to);
+        // 관리자는 학습자 기록도 읽을 수 있으므로, 내 기기 기록에는 반드시 내 것만 받는다
+        let q = sb.from('kgs_events').select('id,kind,item_id,data,client_at,device_id,created_at').eq('user_id', uid).order('created_at', { ascending: true }).order('id', { ascending: true }).range(from, to);
         if (since) q = q.gte('created_at', since);
         const { data, error } = await q; if (error) throw netErr(error); return data || [];
       },
@@ -64,19 +65,22 @@
     };
   }
 
+  const canEdit = () => app.role === 'editor' || app.role === 'admin';
+  const isAdmin = () => app.role === 'admin';
+
   // ---------- 계정 시작/종료 ----------
   async function startAccount(mode, user) {
     teardown();
     const gen = ++app.gen;
-    app.mode = mode; app.user = user; app.role = mode === 'local' ? 'editor' : null;
+    app.mode = mode; app.user = user; app.role = mode === 'local' ? 'editor' : null; app.watch = null;
     try { app.store = new K.LocalStore(localStorage, mode === 'local' ? 'local' : user.id); }
     catch (e) {
       if (e.code === 'CORRUPT') { renderCorrupt(e, mode === 'local' ? 'local' : user.id); return; }
       throw e;
     }
     if (mode === 'server') {
-      app.sync = new K.SyncEngine({ store: app.store, api: makeApi(app.sb), onChange: () => { if (gen === app.gen) renderStatus(); } });
-      app.sb.from('kgs_members').select('role').maybeSingle().then(({ data }) => { if (gen === app.gen) { app.role = data ? data.role : 'none'; render(); } });
+      app.sync = new K.SyncEngine({ store: app.store, api: makeApi(app.sb, user.id), onChange: () => { if (gen === app.gen) renderStatus(); } });
+      app.sb.from('kgs_members').select('role').eq('user_id', user.id).maybeSingle().then(({ data }) => { if (gen === app.gen) { app.role = data ? data.role : 'none'; render(); } });
     }
     await loadBank(gen);
     if (gen !== app.gen) return;
@@ -87,7 +91,7 @@
     app.gen++;
     if (app.sync) app.sync.stop();
     clearInterval(app.timer);
-    app.store = null; app.sync = null; app.user = null; app.role = null; app.study = null; app.bank = null; app.rawBank = null; app.view = 'home';
+    app.store = null; app.sync = null; app.user = null; app.role = null; app.study = null; app.bank = null; app.rawBank = null; app.view = 'home'; app.watch = null;
   }
   function kick() {
     if (!app.sync) return;
@@ -181,6 +185,7 @@
     else if (app.view === 'settings') body = settingsHtml();
     else if (app.view === 'keys') body = keysHtml();
     else if (app.view === 'check') body = checkHtml();
+    else if (app.view === 'learners') body = learnersHtml();
     else body = homeHtml();
     const keepY = window.scrollY;
     root.innerHTML = `<div class="shell ${app.view === 'study' ? 'is-study' : ''}">${nav}<main class="main"><div class="topbar"><div class="who">${esc(app.mode === 'local' ? '이 기기 전용' : (app.user.email || ''))}</div><div id="status"></div></div>${body}</main></div>`;
@@ -188,7 +193,7 @@
     renderStatus();
   }
   /** 입력 중인 화면(정답 대조·점검·설정)은 다시 그리지 않고 상태 표시만 바꾼다 */
-  function softRender() { if (['keys', 'check', 'settings'].includes(app.view)) renderStatus(); else render(); }
+  function softRender() { if (['keys', 'check', 'settings', 'learners'].includes(app.view)) renderStatus(); else render(); }
   function renderStatus() {
     const el = $('#status'); if (!el) return;
     if (app.mode === 'local') { el.innerHTML = `<span class="badge muted">이 기기에만 저장 (서버 미연결)</span>`; return; }
@@ -212,9 +217,10 @@
       home: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
       practice: '<path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/>',
       records: '<path d="M4 20V10M10 20V4M16 20v-7M21 20H3"/>',
+      learners: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.5a3.5 3.5 0 0 1 0 7M18.5 14.8c1.6.8 2.7 2.6 3 5.2"/>',
       settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/>',
     };
-    const items = [['home', '오늘 학습'], ['practice', '문제 풀기'], ['records', '기록'], ['settings', '설정']];
+    const items = [['home', '오늘 학습'], ['practice', '문제 풀기'], ['records', '기록']].concat(isAdmin() ? [['learners', '학습자 기록']] : []).concat([['settings', '설정']]);
     return `<nav class="nav"><div class="brand">건축기사 <b>학습보드</b></div>${items.map(([v, t]) => `<button data-act="go" data-v="${v}" class="${app.view === v || (v === 'practice' && app.view === 'study') ? 'on' : ''}"><svg viewBox="0 0 24 24" aria-hidden="true">${I[v]}</svg><span>${t}</span></button>`).join('')}</nav>`;
   }
 
@@ -399,8 +405,8 @@
       <section class="card"><h2>시험 단계</h2><p>현재: <b>${esc(s.stage)}</b></p>
         ${s.stage === '필기' ? `<button class="btn" data-act="stage" data-stage="실기">필기 합격 · 실기 준비 시작</button><p class="tiny muted">직접 눌러야만 바뀝니다. 필기 기록은 계속 볼 수 있어요.</p>` : `<button class="btn" data-act="stage" data-stage="필기">필기 단계로 돌아가기</button>`}</section>
       <section class="card"><h2>문제은행</h2><p>${app.bank ? `${esc(app.bank.title)} · ${app.bank.items.length}문항` : '없음'} · 대조 완료 ${s.overall.available} · 검토 대기 ${s.overall.pending}</p>
-        ${app.role === 'editor' ? `<button class="btn" data-act="go" data-v="keys">정답 대조 (설계자)</button>` : ''}
-        ${app.mode === 'server' && app.role === 'editor' ? `<button class="btn" data-act="go" data-v="check">서버 접근 점검 (설계자)</button>` : ''}
+        ${canEdit() ? `<button class="btn" data-act="go" data-v="keys">정답 대조 (설계자)</button>` : ''}
+        ${app.mode === 'server' && canEdit() ? `<button class="btn" data-act="go" data-v="check">서버 접근 점검 (설계자)</button>` : ''}
         <label class="btn filebtn">문제은행 파일 교체<input type="file" accept=".json" data-act="bankfile" hidden></label></section>`;
   }
 
@@ -485,6 +491,61 @@
     } catch (e) { log(false, '점검 중 오류: ' + (e.message || e)); }
   }
 
+  // ---------- 학습자 기록 (최고관리자, 읽기 전용) ----------
+  async function loadLearners() {
+    const gen = app.gen;
+    app.watch = { list: null, uid: null, events: null, at: null, error: null, loading: true };
+    const { data, error } = await app.sb.from('kgs_members').select('user_id,role,label').eq('role', 'learner');
+    if (gen !== app.gen) return;
+    if (error) { app.watch.error = error.message; render(); return; }
+    app.watch.list = data || [];
+    if (!app.watch.uid && app.watch.list.length) app.watch.uid = app.watch.list[0].user_id;
+    await loadLearnerEvents();
+  }
+  async function loadLearnerEvents() {
+    const gen = app.gen, w = app.watch; if (!w || !w.uid) { render(); return; }
+    w.loading = true; render();
+    try {
+      const rows = []; let from = 0;
+      for (;;) {
+        const { data, error } = await app.sb.from('kgs_events').select('id,kind,item_id,data,client_at,device_id,created_at').eq('user_id', w.uid).order('created_at', { ascending: true }).order('id', { ascending: true }).range(from, from + 999);
+        if (error) throw error;
+        rows.push(...data); if (data.length < 1000) break; from += 1000;
+      }
+      if (gen !== app.gen) return;
+      const evs = {}; for (const r of rows) evs[r.id] = { id: r.id, kind: r.kind, item: r.item_id, data: r.data, at: new Date(r.client_at).toISOString(), device: r.device_id };
+      w.events = evs; w.at = new Date().toISOString(); w.error = null;
+    } catch (e) { if (gen === app.gen) w.error = e.message || String(e); }
+    w.loading = false; if (gen === app.gen && app.view === 'learners') render();
+  }
+  function learnersHtml() {
+    if (!app.watch) loadLearners();
+    const w = app.watch;
+    if (!w.list && !w.error) { return '<section class="card"><p class="muted">학습자 기록을 불러오는 중…</p></section>'; }
+    if (w.error) return `<section class="card"><h2>학습자 기록</h2><p class="msg bad">불러오지 못했습니다: ${esc(w.error)}</p><button class="btn" data-act="watchreload">다시 불러오기</button></section>`;
+    if (!w.list.length) return '<section class="card"><h2>학습자 기록</h2><p class="muted">등록된 학습자가 없습니다.</p></section>';
+    const who = w.list.find(x => x.user_id === w.uid);
+    const head = `<section class="card"><div class="cardhead row-between"><div><h2>${esc(who && who.label || '학습자')} 학습 기록</h2><span class="sub">읽기 전용 · 서버에 저장된 기록 기준${w.at ? ' · ' + new Date(w.at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) + ' 확인' : ''}</span></div>
+      <div class="btns">${w.list.length > 1 ? `<select data-act="watchwho">${w.list.map(x => `<option value="${x.user_id}" ${x.user_id === w.uid ? 'selected' : ''}>${esc(x.label || x.user_id.slice(0, 8))}</option>`).join('')}</select>` : ''}<button class="btn" data-act="watchreload">${w.loading ? '불러오는 중…' : '새로 불러오기'}</button></div></div>
+      <p class="foot" style="margin-top:0">아직 학습자 기기에서 서버로 보내지 못한 풀이는 여기에 보이지 않습니다.</p></section>`;
+    if (!w.events) return head;
+    const s = K.computeStats(app.bank, w.events, new Date().toISOString());
+    const attempts = K.sortedEvents(w.events).filter(e => e.kind === 'attempt');
+    // 최근 14일 하루별 풀이 수
+    const days = []; for (let i = 13; i >= 0; i--) days.push(K.addDays(s.today, -i));
+    const perDay = Object.fromEntries(days.map(d => [d, 0])); attempts.forEach(e => { const d = K.kstDate(e.at); if (d in perDay) perDay[d]++; });
+    const max = Math.max(1, ...Object.values(perDay));
+    const last = attempts.length ? attempts[attempts.length - 1] : null;
+    const activity = `<section class="card"><div class="cardhead"><h2>최근 14일 풀이량</h2><span class="sub">하루에 제출한 횟수 · 마지막 풀이 ${last ? new Date(last.at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '없음'}</span></div>
+      <div class="days">${days.map(d => `<div class="day" title="${d} · ${perDay[d]}회"><i style="height:${Math.round(perDay[d] / max * 100)}%"></i><b>${perDay[d] || ''}</b><span>${Number(d.slice(8))}</span></div>`).join('')}</div></section>`;
+    const recent = attempts.slice(-30).reverse();
+    const list = `<section class="card"><div class="cardhead"><h2>최근 제출 ${recent.length}건</h2><span class="sub">헷갈림 표시는 ?로 보입니다</span></div><div class="tablewrap"><table class="list"><thead><tr><th>시각</th><th>문항</th><th>답</th><th>결과</th><th>구분</th></tr></thead><tbody>
+      ${recent.map(e => { const it = app.bank.byId[e.data.item]; const ok = K.scorable(it); const hist = K.itemHistories(K.sortedEvents(w.events), app.bank).get(e.data.item) || []; const first = hist[0] && hist[0].id === e.id;
+        return `<tr><td>${new Date(e.at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td><td>${it ? `${it.no}번 ${esc(it.subject)}` : esc(e.data.item)}</td><td>${e.data.choice}${e.data.unsure ? ' ?' : ''}</td><td>${ok ? (K.isCorrect(e, app.bank) ? '<span class="good">정답</span>' : '<span class="bad">오답</span>') : '<span class="muted">검토 대기</span>'}</td><td class="muted">${first ? '첫 풀이' : '복습'}</td></tr>`; }).join('')}
+      </tbody></table></div></section>`;
+    return head + dashboardHtml(s) + activity + roundsHtml(s) + list;
+  }
+
   // ---------- 회차 결과 ----------
   function finishHtmlToast() {
     const s = stats(); const done = s.doneRounds.find(r => r.session === app.study.sessionId);
@@ -499,7 +560,7 @@
     const b = e.target.closest('[data-act]'); if (!b || b.tagName === 'INPUT') return;
     const act = b.dataset.act;
     try {
-      if (act === 'go') { app.view = b.dataset.v; app.viewArg = null; if (b.dataset.v !== 'study') app.study = app.view === 'study' ? app.study : null; render(); window.scrollTo(0, 0); }
+      if (act === 'go') { if (b.dataset.v === 'learners' && app.watch && app.watch.list) loadLearnerEvents(); app.view = b.dataset.v; app.viewArg = null; if (b.dataset.v !== 'study') app.study = app.view === 'study' ? app.study : null; render(); window.scrollTo(0, 0); }
       else if (act === 'local') { await startAccount('local', { id: 'local' }); }
       else if (act === 'signup') { const f = $('#loginForm'); if (!f.reportValidity()) return; const fd = new FormData(f); const { error } = await app.sb.auth.signUp({ email: fd.get('email'), password: fd.get('password'), options: { emailRedirectTo: location.href.split('#')[0] } }); $('#loginMsg').textContent = error ? '가입 실패: ' + error.message : '가입 요청 완료. 메일의 확인 링크를 누른 뒤 로그인하세요.'; }
       else if (act === 'sync') { kick(); }
@@ -521,6 +582,7 @@
       else if (act === 'stage') { if (confirm(b.dataset.stage === '실기' ? '필기 합격 후 실기 준비를 시작할까요? 필기 기록은 그대로 남습니다.' : '필기 단계로 돌아갈까요?')) { addEvent('stage', { stage: b.dataset.stage }); render(); } }
       else if (act === 'export') { exportBackup(); }
       else if (act === 'reloadbank') { await loadBank(app.gen); render(); }
+      else if (act === 'watchreload') { if (app.watch && app.watch.list) loadLearnerEvents(); else { app.watch = null; render(); } }
       else if (act === 'keyfilter') { app.viewArg = b.dataset.f; render(); }
       else if (act === 'logout' || act === 'logoutwipe') { await logout(act === 'logoutwipe'); }
     } catch (err) { console.error(err); toast(String(err.message || err), 'bad'); }
@@ -529,6 +591,7 @@
     const t = e.target; const act = t.dataset && t.dataset.act;
     try {
       if (act === 'unsure') { app.study.unsure = t.checked; }
+      else if (act === 'watchwho') { app.watch.uid = t.value; app.watch.events = null; loadLearnerEvents(); }
       else if (act === 'bankfile' && t.files[0]) { await openBankFile(t.files[0]); }
       else if (act === 'import' && t.files[0]) { await importBackup(t.files[0]); }
     } catch (err) { toast(String(err.message || err), 'bad'); }

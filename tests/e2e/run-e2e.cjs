@@ -144,7 +144,7 @@ async function step(name, fn) { try { await fn(); results.push(['✔', name]); }
       await pc.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 1500, deviceScaleFactor: 1, mobile: false }); await pc.shot('06c-pc-home-full.png');
       await pc.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 860, deviceScaleFactor: 1, mobile: false });
     });
-    await step('정답 대조: 설계자(편집자)가 56번 검토대기 → 대조완료 저장 → 남편 기기에서 채점 가능 문항 100', async () => {
+    await step('정답 대조: 설계자(관리자)가 56번 검토대기 → 대조완료 저장 → 남편 기기에서 채점 가능 문항 100', async () => {
       await pc.click('[data-act="go"][data-v="settings"]'); await pc.click('[data-act="logout"]');
       await pc.login('wife@test.kr');
       await pc.click('[data-act="go"][data-v="settings"]'); await pc.click('[data-act="go"][data-v="keys"]');
@@ -154,6 +154,16 @@ async function step(name, fn) { try { await fn(); results.push(['✔', name]); }
       await sleep(600);
       await phone.click('#status .badge'); await sleep(800);
       assert.strictEqual(await phone.eval('KGS.computeStats(KGS_APP.bank,KGS_APP.store.state.events,new Date().toISOString()).overall.available'), 100);
+    });
+    await step('최고관리자: 진영 계정에서 남편 기록을 읽기 전용으로 보고, 숫자가 남편 기기와 같음 · 진영 기기 기록에는 섞이지 않음', async () => {
+      const hs = await phone.stats();
+      await pc.click('[data-act="go"][data-v="learners"]');
+      await pc.waitFor('document.querySelector("table.dash") && document.body.innerText.includes("남편 학습 기록")', 8000, '학습자 기록 화면');
+      const seen = await pc.eval(`(()=>{const s=KGS.computeStats(KGS_APP.bank,KGS_APP.watch.events,new Date().toISOString()); return s.subjects.map(x=>({s:x.subject,seen:x.seen,avail:x.available,fresh:x.vol.all.fresh,review:x.vol.all.review,fc:x.firstCount,fcor:x.firstCorrect,retried:x.retried,rc:x.retryCorrect}));})()`);
+      assert.deepStrictEqual(seen, hs.subjects);
+      assert.strictEqual(await pc.eval('Object.values(KGS_APP.store.state.events).filter(e=>e.kind==="attempt").length'), 0, '진영 기기 기록에 남편 풀이가 섞임');
+      await pc.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 1900, deviceScaleFactor: 1, mobile: false }); await pc.shot('12-pc-admin-learner.png');
+      await pc.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 860, deviceScaleFactor: 1, mobile: false });
     });
     await step('인수6: 같은 PC에서 다른 계정 로그인 → 이전 계정 기록·문제은행 안 보임 / 서버 접근 점검 통과', async () => {
       await pc.click('[data-act="go"][data-v="settings"]'); await pc.click('[data-act="logout"]');

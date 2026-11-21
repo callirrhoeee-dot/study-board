@@ -71,3 +71,42 @@ reset role;
 
 -- 기존 v6 테이블은 그대로
 select pg_temp.ok((select revision from public.study_sync_snapshots) = 7 and (select data->>'old' from public.study_sync_snapshots) = 'true', '기존 v6 테이블·데이터 변경 없음');
+
+-- ===== 003: 최고관리자(admin) =====
+reset role;
+\i server/003_admin_role.sql
+update public.kgs_members set role = 'admin', label = '진영' where user_id = '33333333-3333-4333-8333-333333333333';
+update public.kgs_members set label = '남편' where user_id = '11111111-1111-4111-8111-111111111111';
+-- 관리자 자신의 기록 1건
+select pg_temp.as_user('33333333-3333-4333-8333-333333333333');
+set role authenticated;
+insert into public.kgs_events (id, kind, data, client_at) values ('bbbbbbbb-0000-4000-8000-000000000001', 'stage', '{"stage":"필기"}', now());
+select pg_temp.ok((select count(*) from public.kgs_events where user_id = '11111111-1111-4111-8111-111111111111') = 1, '관리자: 학습자 기록 읽기 가능');
+select pg_temp.ok((select count(*) from public.kgs_events where user_id = (select auth.uid())) = 1, '관리자: 자기 기록은 user_id로 구분됨');
+select pg_temp.ok((select count(*) from public.kgs_members) = 2, '관리자: 사용자 목록 전체 보임');
+do $$ begin
+  begin update public.kgs_events set data = '{}' where user_id = '11111111-1111-4111-8111-111111111111'; raise exception 'FAIL: 관리자가 학습자 기록 수정';
+  exception when insufficient_privilege then raise notice 'PASS: 관리자도 학습자 기록 수정 불가 (권한 없음)'; end;
+  begin delete from public.kgs_events where user_id = '11111111-1111-4111-8111-111111111111'; raise exception 'FAIL: 관리자가 학습자 기록 삭제';
+  exception when insufficient_privilege then raise notice 'PASS: 관리자도 학습자 기록 삭제 불가 (권한 없음)'; end;
+  begin insert into public.kgs_events (id, kind, data, client_at, user_id) values (gen_random_uuid(), 'attempt', '{}', now(), '11111111-1111-4111-8111-111111111111');
+    if (select count(*) from public.kgs_events where user_id = '11111111-1111-4111-8111-111111111111') <> 1 then raise exception 'FAIL: 관리자가 학습자 이름으로 기록 추가'; end if;
+    raise notice 'PASS: 관리자가 학습자 이름으로 써도 관리자 기록으로 저장됨';
+  end;
+end $$;
+insert into public.kgs_bank_keys (item_id, bank_id, answer, status) values ('P-2026-1-001', 'pilgi-2026-1', 2, '대조완료') on conflict (item_id) do update set answer = excluded.answer;
+select pg_temp.ok(true, '관리자: 정답 대조 저장 가능');
+reset role;
+-- 학습자는 관리자 기록을 못 봄, 다른 계정은 여전히 아무것도 못 봄
+select pg_temp.as_user('11111111-1111-4111-8111-111111111111');
+set role authenticated;
+select pg_temp.ok((select count(*) from public.kgs_events where user_id <> (select auth.uid())) = 0, '학습자: 관리자 기록 안 보임');
+select pg_temp.ok((select count(*) from public.kgs_members) = 1, '학습자: 사용자 목록은 본인만');
+reset role;
+select pg_temp.as_user('22222222-2222-4222-8222-222222222222');
+set role authenticated;
+select pg_temp.ok((select count(*) from public.kgs_events) = 0, '미등록 계정: 여전히 아무 기록도 안 보임');
+do $$ begin
+  begin perform private.kgs_my_role(); raise notice 'PASS: 역할 함수는 실행돼도 본인 역할만 돌려줌(%)', coalesce(private.kgs_my_role(), '없음'); end;
+end $$;
+reset role;
