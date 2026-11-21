@@ -12,6 +12,7 @@
 | `server/001_kgs_schema.sql` | 서버에 새 표 3개 + 접근 규칙 추가 (기존 v6 표는 건드리지 않음) | 승인 후 실행 |
 | `server/002_check_readonly.sql` | 읽기만 하는 서버 상태 점검 | 언제든 실행 가능 |
 | `server/003_admin_role.sql` | 최고관리자(admin): 학습자 기록 읽기 전용 + 정답 대조 | 적용됨 |
+| `server/004_signup_allowlist.sql` | 가입 허용 목록: 목록 이메일만 가입, 가입 시 역할 자동 지정 | 적용됨 |
 | `tools/` | 문제집·해설집 PDF에서 문제은행을 만드는 스크립트 | 개발용 |
 | `tests/` | 자동 테스트 (논리 · 브라우저 · SQL) | 개발용 |
 

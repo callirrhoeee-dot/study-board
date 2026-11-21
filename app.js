@@ -562,7 +562,7 @@
     try {
       if (act === 'go') { if (b.dataset.v === 'learners' && app.watch && app.watch.list) loadLearnerEvents(); app.view = b.dataset.v; app.viewArg = null; if (b.dataset.v !== 'study') app.study = app.view === 'study' ? app.study : null; render(); window.scrollTo(0, 0); }
       else if (act === 'local') { await startAccount('local', { id: 'local' }); }
-      else if (act === 'signup') { const f = $('#loginForm'); if (!f.reportValidity()) return; const fd = new FormData(f); const { error } = await app.sb.auth.signUp({ email: fd.get('email'), password: fd.get('password'), options: { emailRedirectTo: location.href.split('#')[0] } }); $('#loginMsg').textContent = error ? '가입 실패: ' + error.message : '가입 요청 완료. 메일의 확인 링크를 누른 뒤 로그인하세요.'; }
+      else if (act === 'signup') { const f = $('#loginForm'); if (!f.reportValidity()) return; const fd = new FormData(f); const { error } = await app.sb.auth.signUp({ email: fd.get('email'), password: fd.get('password'), options: { emailRedirectTo: location.href.split('#')[0] } }); $('#loginMsg').textContent = error ? (/Database error|KGS_NOT_ALLOWED|not allowed/i.test(error.message) ? '가입할 수 없는 이메일입니다. 등록된 이메일만 가입할 수 있어요.' : '가입 실패: ' + error.message) : '가입 요청 완료. 메일의 확인 링크를 누른 뒤 로그인하세요.'; }
       else if (act === 'sync') { kick(); }
       else if (act === 'resume') { openSession(b.dataset.id); }
       else if (act === 'rec') { const r = K.recommend(app.bank, stats())[Number(b.dataset.i)]; if (r) startSession(r.mode, r.label, r.items, r.roundKey); }

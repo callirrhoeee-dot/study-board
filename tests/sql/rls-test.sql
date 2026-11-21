@@ -110,3 +110,14 @@ do $$ begin
   begin perform private.kgs_my_role(); raise notice 'PASS: 역할 함수는 실행돼도 본인 역할만 돌려줌(%)', coalesce(private.kgs_my_role(), '없음'); end;
 end $$;
 reset role;
+
+-- ===== 004: 가입 허용 목록 =====
+reset role;
+\i server/004_signup_allowlist.sql
+select pg_temp.ok(not exists (select 1 from auth.users where email = 'callirrhoeee@gmail.com') or (select role from public.kgs_members m join auth.users u on u.id = m.user_id where u.email = 'callirrhoeee@gmail.com') = 'admin', '허용 목록: 관리자 이메일은 admin');
+do $$ begin
+  begin insert into auth.users values (gen_random_uuid(), 'stranger@test.invalid'); raise exception 'FAIL: 미허용 이메일 가입됨';
+  exception when insufficient_privilege then raise notice 'PASS: 미허용 이메일 가입 거절'; end; end $$;
+insert into private.kgs_allowlist values ('husband-test@test.invalid', 'learner', '남편') on conflict do nothing;
+insert into auth.users values ('66666666-6666-4666-8666-666666666666', 'Husband-Test@test.invalid');
+select pg_temp.ok((select role from public.kgs_members where user_id = '66666666-6666-4666-8666-666666666666') = 'learner', '허용 이메일 가입 → 학습자 자동 등록(대소문자 무관)');
