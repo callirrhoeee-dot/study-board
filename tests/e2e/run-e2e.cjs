@@ -144,6 +144,53 @@ async function step(name, fn) { try { await fn(); results.push(['✔', name]); }
       await pc.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 1500, deviceScaleFactor: 1, mobile: false }); await pc.shot('06c-pc-home-full.png');
       await pc.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 860, deviceScaleFactor: 1, mobile: false });
     });
+    await step('개념 카드: 오늘 카드 → 카드 학습 기록 → 확인 문제(기존 풀이 화면) → 틀린 문항에서 관련 카드 → 돌아가기 · 기존 통계 규칙 유지', async () => {
+      const subjOf = s => s.subjects.find(x => x.s === '건축구조');
+      const before = subjOf(await phone.stats());
+      await phone.click('[data-act="go"][data-v="practice"]');
+      await phone.waitFor('document.body.innerText.includes("건축구조 기초 개념 카드")', 4000, '문제 풀기에 카드 묶음');
+      await phone.clickText('button', '오늘 카드 보기');
+      await phone.waitFor('document.querySelector(".ccard svg.cfig") && document.querySelector(".formula")', 4000, '카드: 그림·수식');
+      await phone.shot('13-phone-card.png');
+      assert.ok(!(await phone.eval('document.documentElement.scrollWidth > window.innerWidth + 1')), '카드 화면 가로 넘침');
+      const first = await phone.eval('KGS_APP.viewArg');
+      await phone.clickText('button', '카드 다 봤어요');
+      await phone.waitFor(`KGS_APP.view==='concept' && KGS_APP.viewArg!==${JSON.stringify(first)}`, 4000, '다음 카드로');
+      let cs = await phone.eval('KGS.conceptStats(KGS_APP.cards,KGS_APP.bank,KGS_APP.store.state.events).studiedCount'); assert.strictEqual(cs, 1);
+      // 문제은행에 문항이 있는 카드(모멘트분배법: 42번)
+      await phone.click('[data-act="cards"]'); await phone.click('[data-act="card"][data-id="STR:MEC-DIST"]');
+      await phone.waitFor('document.body.innerText.includes("확인 문제")', 4000);
+      await phone.clickText('button', '확인 문제 풀기');
+      await phone.waitFor('KGS_APP.view==="study"', 4000, '확인 문제 풀이 화면');
+      const no = await phone.answer(false);
+      assert.strictEqual(no, 42);
+      await phone.waitFor('document.querySelector(".cardlinks [data-act=card]")', 3000, '틀린 문항 → 관련 카드 버튼');
+      await phone.shot('14-phone-wrong-card-link.png');
+      await phone.click('.cardlinks [data-act="card"]');
+      await phone.waitFor('KGS_APP.view==="concept" && document.querySelector("[data-act=cardback]")', 3000, '카드 + 풀던 문제로');
+      await phone.click('[data-act="cardback"]');
+      await phone.waitFor('KGS_APP.view==="study" && document.querySelector(".result")', 3000, '풀던 문제로 돌아옴');
+      await phone.waitFor('document.querySelector(".donebar")', 3000, '확인 문제 끝');
+      await phone.clickText('.donebar button', '마치기');
+      await phone.waitFor('document.querySelector("#status .badge.ok")', 8000);
+      const after = subjOf(await phone.stats());
+      const wasSeen = before.seen; // 42번을 전에 풀었는지에 따라 신규/재풀이
+      assert.strictEqual(after.fresh + after.review, before.fresh + before.review + 1, '제출 1회만 늘어남');
+      assert.ok(after.seen === wasSeen || after.seen === wasSeen + 1);
+      cs = await phone.eval('(()=>{const s=KGS.conceptStats(KGS_APP.cards,KGS_APP.bank,KGS_APP.store.state.events); const r=s.byCard.get("STR:MEC-DIST"); return {n:s.studiedCount, after:r.after};})()');
+      assert.strictEqual(cs.n, 2); assert.deepStrictEqual(cs.after, { n: 1, c: 0 });
+      await phone.click('[data-act="go"][data-v="home"]');
+      await phone.waitFor('document.body.innerText.includes("개념 카드 학습 효과")', 3000, '홈 대시보드에 카드 효과');
+      assert.ok((await phone.text()).includes('일차 개념 카드'), '오늘 공부할 것에 카드 묶음');
+      await phone.shot('15-phone-home-cards.png');
+      // PC(같은 계정)에도 같은 카드 기록
+      await pc.click('#status .badge'); await sleep(900);
+      assert.strictEqual(await pc.eval('KGS.conceptStats(KGS_APP.cards,KGS_APP.bank,KGS_APP.store.state.events).studiedCount'), 2);
+      await pc.click('[data-act="go"][data-v="practice"]'); await pc.clickText('button', '전체 카드'); await sleep(200); await pc.shot('16-pc-card-list.png');
+      await pc.click('[data-act="card"][data-id="STR:RC-RHO"]'); await sleep(200);
+      await pc.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 1500, deviceScaleFactor: 1, mobile: false }); await pc.shot('17-pc-card.png');
+      await pc.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 860, deviceScaleFactor: 1, mobile: false });
+    });
     await step('정답 대조: 설계자(관리자)가 56번 검토대기 → 대조완료 저장 → 남편 기기에서 채점 가능 문항 100', async () => {
       await pc.click('[data-act="go"][data-v="settings"]'); await pc.click('[data-act="logout"]');
       await pc.login('wife@test.kr');

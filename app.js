@@ -35,6 +35,7 @@
     view: 'home', viewArg: null,
     study: null,         // { sessionId, idx, selected, unsure, draftId, showOrig }
     timer: null, toast: null, bankError: null,
+    cards: K.allConceptCards(window.KGS_CONCEPTS), back: null, // 개념 카드(추가 기능) · back = 카드를 열기 전 풀던 문제
   };
   const online = () => navigator.onLine !== false;
 
@@ -137,10 +138,10 @@
   const stats = () => K.computeStats(app.bank, events(), new Date().toISOString());
 
   // ---------- 풀이 시작 ----------
-  function startSession(mode, label, items, roundKey) {
+  function startSession(mode, label, items, roundKey, extra) {
     items = items.filter(id => app.bank.byId[id]);
     if (!items.length) { toast('풀 문제가 없습니다'); return; }
-    const ev = addEvent('session', { mode, label, items, roundKey: roundKey || null, stage: '필기' });
+    const ev = addEvent('session', Object.assign({ mode, label, items, roundKey: roundKey || null, stage: '필기' }, extra || {}));
     openSession(ev.id, 0);
   }
   function openSession(sessionId, idx) {
@@ -186,6 +187,8 @@
     else if (app.view === 'keys') body = keysHtml();
     else if (app.view === 'check') body = checkHtml();
     else if (app.view === 'learners') body = learnersHtml();
+    else if (app.view === 'concepts') body = conceptsHtml();
+    else if (app.view === 'concept') body = conceptHtml();
     else body = homeHtml();
     const keepY = window.scrollY;
     root.innerHTML = `<div class="shell ${app.view === 'study' ? 'is-study' : ''}">${nav}<main class="main"><div class="topbar"><div class="who">${esc(app.mode === 'local' ? '이 기기 전용' : (app.user.email || ''))}</div><div id="status"></div></div>${body}</main></div>`;
@@ -221,7 +224,7 @@
       settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/>',
     };
     const items = [['home', '오늘 학습'], ['practice', '문제 풀기'], ['records', '기록']].concat(isAdmin() ? [['learners', '학습자 기록']] : []).concat([['settings', '설정']]);
-    return `<nav class="nav"><div class="brand">건축기사 <b>학습보드</b></div>${items.map(([v, t]) => `<button data-act="go" data-v="${v}" class="${app.view === v || (v === 'practice' && app.view === 'study') ? 'on' : ''}"><svg viewBox="0 0 24 24" aria-hidden="true">${I[v]}</svg><span>${t}</span></button>`).join('')}</nav>`;
+    return `<nav class="nav"><div class="brand">건축기사 <b>학습보드</b></div>${items.map(([v, t]) => `<button data-act="go" data-v="${v}" class="${app.view === v || (v === 'practice' && ['study', 'concepts', 'concept'].includes(app.view)) ? 'on' : ''}"><svg viewBox="0 0 24 24" aria-hidden="true">${I[v]}</svg><span>${t}</span></button>`).join('')}</nav>`;
   }
 
   // ---------- 로그인 ----------
@@ -278,8 +281,10 @@
     return `<div class="${resume ? 'grid2' : ''}">${resume}${tiles}</div>
       <section class="card"><div class="cardhead row-between"><div><h2>오늘 공부할 것</h2><span class="sub">풀이 기록을 바탕으로 고른 순서</span></div>${quick.length ? `<button class="btn" data-act="quick">15분 학습 · ${quick.length}문항</button>` : ''}</div>
         ${recs.length ? `<ul class="list-rows">${recs.map((r, i) => `<li class="rec"><div><b>${esc(r.title)}</b><p class="reason">${esc(r.reason)}</p></div><button class="btn primary" data-act="rec" data-i="${i}">${esc(r.cta)}</button></li>`).join('')}</ul>` : '<p class="muted">오늘 기한이 된 복습이 없어요. 문제 풀기에서 원하는 과목을 골라 보세요.</p>'}
+        ${conceptRecHtml(s)}
       </section>
       ${dashboardHtml(s)}
+      ${conceptEffectHtml(true)}
       ${roundsHtml(s)}`;
   }
   function dashboardHtml(s) {
@@ -324,6 +329,7 @@
     return `<section class="card"><div class="cardhead"><h2>회차별 풀이</h2><span class="sub">실제 시험처럼 100문항을 순서대로</span></div>
         <div class="rec"><div><b>${esc(b.title)}</b><p class="reason">100문항 · 채점 가능 ${s.overall.available}문항</p></div><button class="btn primary" data-act="round">처음부터 회차 풀기</button></div></section>
       <section class="card"><div class="cardhead"><h2>과목별 풀이</h2><span class="sub">새 문제는 안 푼 문제 5개씩</span></div>${s.subjects.map(S => `<div class="rec"><div><b>${esc(S.subject)}</b><p class="reason">안 푼 문제 ${S.unseen.length}개 · 진도 ${S.seen}/${S.available}</p></div><div class="btns"><button class="btn primary" data-act="subj" data-s="${esc(S.subject)}" data-new="1" ${S.unseen.length ? '' : 'disabled'}>새 문제</button><button class="btn" data-act="subj" data-s="${esc(S.subject)}">전체 20문항</button></div></div>`).join('')}</section>
+      ${conceptPracticeHtml()}
       <section class="card"><div class="cardhead"><h2>오답·헷갈림 복습</h2><span class="sub">틀린 문제는 다음 날, 헷갈린 문제는 3일 뒤</span></div>
         <div class="rec"><div><b>오늘 복습할 문제 ${due.length}개</b><p class="reason">틀린 문제는 다음 날, 맞혔지만 헷갈린 문제는 3일 뒤에 다시 나옵니다.</p></div><button class="btn primary" data-act="review" data-all="0" ${due.length ? '' : 'disabled'}>복습 시작</button></div>
         <div class="rec"><div><b>복습 대상 전체 ${allFlag.length}개</b><p class="reason">기한과 관계없이 틀렸거나 헷갈린 문제 모두</p></div><button class="btn" data-act="review" data-all="1" ${allFlag.length ? '' : 'disabled'}>모두 풀기</button></div></section>`;
@@ -356,6 +362,7 @@
         ${ok ? `<p class="tiny muted">${correct && !mine.data.unsure ? '확실히 맞힌 문제는 복습에 넣지 않아요.' : correct ? '헷갈린 문제라 3일 뒤 복습에 다시 나옵니다.' : '내일 복습에 다시 나옵니다.'}</p>` : ''}
         ${it.explanationCrops && it.explanationCrops.length ? `<div class="expl"><div class="eyebrow">정답 · 해설 (해설집 ${esc((it.keySrc && it.keySrc.printedPages || []).join(', '))}쪽)</div>${it.explanationCrops.map(c => `<img src="${c}" alt="해설">`).join('')}</div>` : ''}
         ${it.keyNote ? `<p class="tiny">설계자 메모: ${esc(it.keyNote)}</p>` : ''}
+        ${relatedCardsHtml(id, ok && !correct)}
       </section>`;
     }
     const meta = `${it.year}년 ${it.round}회 ${it.no}번 · ${esc(it.subject)}${prevAttempts.length ? ` · 이전 풀이 ${prevAttempts.length}회` : ''}`;
@@ -363,7 +370,7 @@
       <div class="studyhead"><button class="btn ghost" data-act="go" data-v="home">나가기</button><div><b>${esc(s.label)}</b><div class="tiny muted">${st.idx + 1}/${n}번째 · 제출 ${answered}/${n}</div></div><button class="btn ghost" data-act="grid">목록</button></div>
       <div class="progress"><i style="width:${Math.round(answered / n * 100)}%"></i></div>
       ${app.study.grid ? `<div class="grid">${s.items.map((x, i) => { const a = s.answers.get(x); const t = app.bank.byId[x]; const c = a ? (K.scorable(t) ? (K.isCorrect(a, app.bank) ? 'g' : 'r') : 'p') : ''; return `<button class="${c} ${i === st.idx ? 'cur' : ''}" data-act="jump" data-i="${i}">${t ? t.no : '?'}</button>`; }).join('')}</div>` : ''}
-      ${done ? `<div class="donebar">이 풀이의 문제를 모두 제출했어요. <button class="btn primary" data-act="finish">결과 보기</button></div>` : ''}
+      ${done ? (s.mode === 'concept' ? conceptDoneHtml(s) : `<div class="donebar">이 풀이의 문제를 모두 제출했어요. <button class="btn primary" data-act="finish">결과 보기</button></div>`) : ''}
       <article class="q card">
         <div class="tiny muted">${meta}${ok ? '' : ' · <span class="state warn">검토 대기 · 채점 제외</span>'}</div>
         <p class="stem">${esc(it.stem).replace(/\n/g, '<br>')}</p>
@@ -379,6 +386,106 @@
         <button class="btn icon" data-act="skip" aria-label="건너뛰기" ${st.idx + 1 >= n ? 'disabled' : ''}><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
       </div>
     </section>`;
+  }
+
+  // ---------- 개념 카드 (추가 기능) ----------
+  /* 과목에 묶이지 않는다: KGS_CONCEPTS.subjects에 과목이 추가되면 같은 화면이 그 과목에도 생긴다. */
+  const cardById = id => app.cards.find(c => c.id === id);
+  const cSubjects = () => Object.keys((window.KGS_CONCEPTS || {}).subjects || {});
+  const cPlan = subj => K.conceptPlan(K.conceptCards(window.KGS_CONCEPTS, subj), 3);
+  const cStats = () => K.conceptStats(app.cards, app.bank, events());
+  const frac = (a, b) => b ? `${a}/${b} · <b>${pct(a, b)}%</b>` : '<span class="muted">—</span>';
+  const itemLabel = id => { const m = /^P-(\d{4})-(\d)-(\d{3})$/.exec(id); return m ? `${m[1]}년 ${m[2]}회 ${Number(m[3])}번` : id; };
+  function conceptRecHtml(s) {
+    if (!app.cards.length) return '';
+    const cs = cStats();
+    return cSubjects().map(subj => {
+      const t = K.conceptToday(cPlan(subj), cs); if (!t) return '';
+      const S = s.subjects.find(x => x.subject === subj);
+      const why = S && S.firstCount ? `${subj} 첫 풀이 ${S.firstCorrect}/${S.firstCount}문항 · ${pct(S.firstCorrect, S.firstCount)}% — 해설 용어부터 잡기` : '기출에 자주 나온 개념부터, 그림 한 장과 한 줄 설명으로';
+      return `<div class="rec"><div><b>${esc(subj)} 기초 · ${t.day}일차 개념 카드 ${t.left.length}장</b><p class="reason">${esc(why)} · ${t.left.map(id => esc(cardById(id).title)).join(', ')}</p></div><button class="btn primary" data-act="card" data-id="${t.left[0]}">카드 보기</button></div>`;
+    }).join('');
+  }
+  function conceptPracticeHtml() {
+    if (!app.cards.length) return '';
+    const cs = cStats();
+    return cSubjects().map(subj => {
+      const cards = K.conceptCards(window.KGS_CONCEPTS, subj); const done = cards.filter(c => cs.byCard.get(c.id).studied).length;
+      const t = K.conceptToday(cPlan(subj), cs);
+      return `<section class="card"><div class="cardhead"><h2>${esc(subj)} 기초 개념 카드</h2><span class="sub">용어·수식 카드 → 쉬운 확인 문제 → 관련 기출 · 하루 3장(약 30분)</span></div>
+        <div class="rec"><div><b>${t ? `${t.day}일차 · ${t.left.length}장 남음` : '모든 카드를 한 번씩 봤어요'}</b><p class="reason">카드 ${done}/${cards.length}장 학습 · 기출 ${(window.KGS_CONCEPTS.subjects[subj] || {}).rounds || ''}회분에서 자주 나온 순서</p></div>
+        <div class="btns">${t ? `<button class="btn primary" data-act="card" data-id="${t.left[0]}">오늘 카드 보기</button>` : ''}<button class="btn" data-act="cards" data-s="${esc(subj)}">전체 카드</button></div></div></section>`;
+    }).join('');
+  }
+  /** 대시보드: 카드를 본 개념의 기출 정답률이 카드 전후로 어떻게 바뀌었나 */
+  function conceptEffectHtml(compact, subj) {
+    if (!app.cards.length) return '';
+    const cs = cStats();
+    const rows = app.cards.filter(c => (!subj || c.subject === subj)).map(c => [c, cs.byCard.get(c.id)]).filter(([, r]) => r.studied || (!compact && r.inBank));
+    if (compact && !cs.studiedCount) return '';
+    const body = rows.map(([c, r]) => `<tr><th>${esc(c.title)}<div class="tiny muted">${esc(c.subject)} · 기출 ${c.freq.rounds}회 출제</div></th>
+      <td data-l="카드 학습">${r.studied ? `<span class="state good">${r.studyCount}회</span>` : '<span class="state none">안 봄</span>'}</td>
+      <td data-l="카드 보기 전 첫 제출">${frac(r.before.c, r.before.n)}</td>
+      <td data-l="카드 본 뒤 첫 제출">${frac(r.after.c, r.after.n)}</td>
+      <td data-l="문제은행 문항">${r.inBank ? `${r.inBank}문항` : '<span class="muted">없음</span>'}</td>
+      <td><button class="btn" data-act="card" data-id="${c.id}">카드</button></td></tr>`).join('');
+    return `<section class="card"><div class="cardhead"><h2>개념 카드 학습 효과</h2><span class="sub">카드 ${cs.studiedCount}/${cs.total}장 학습 · 카드를 본 개념의 기출 정답: 보기 전 ${cs.before.n ? `${cs.before.c}/${cs.before.n} · ${pct(cs.before.c, cs.before.n)}%` : '—'} → 본 뒤 ${cs.after.n ? `${cs.after.c}/${cs.after.n} · ${pct(cs.after.c, cs.after.n)}%` : '—'}</span></div>
+      ${rows.length ? `<div class="tablewrap"><table class="dash"><thead><tr><th>개념</th><th>카드 학습</th><th>보기 전<br>첫 제출</th><th>본 뒤<br>첫 제출</th><th>문제은행<br>문항</th><th></th></tr></thead><tbody>${body}</tbody></table></div>` : '<p class="muted">아직 본 카드가 없어요.</p>'}
+      <p class="foot">문항마다 카드 보기 전·후 각각 처음 낸 답만 셉니다. 과목 표의 첫 풀이 정답률은 바뀌지 않아요(처음 풀 때 값 보존).</p></section>`;
+  }
+  function relatedCardsHtml(itemId, wrong) {
+    const rel = K.conceptsOfItem(app.cards, itemId).slice(0, 2); if (!rel.length) return '';
+    return `<div class="cardlinks"><span class="tiny ${wrong ? 'bad' : 'muted'}">${wrong ? '해설의 용어가 안 읽히면' : '관련 개념'}</span>${rel.map(r => `<button class="btn" data-act="card" data-id="${r.card.id}" data-from="study">${esc(r.card.title)} 카드</button>`).join('')}</div>`;
+  }
+  function conceptDoneHtml(s) {
+    const c = cardById(s.concept);
+    const rel = c ? K.conceptItems(c, app.bank).related.filter(id => !s.items.includes(id)) : [];
+    return `<div class="donebar"><span>${c ? esc(c.title) + ' ' : ''}확인 문제를 모두 풀었어요.</span><div class="btns">${rel.length ? `<button class="btn primary" data-act="cardrel" data-id="${c.id}">관련 기출 ${rel.length}문항</button>` : ''}${c ? `<button class="btn" data-act="card" data-id="${c.id}">카드 다시 보기</button>` : ''}<button class="btn" data-act="finish">마치기</button></div></div>`;
+  }
+  function conceptsHtml() {
+    const subj = app.viewArg || cSubjects()[0]; const cs = cStats(); const plan = cPlan(subj);
+    return `<section class="card"><div class="cardhead row-between"><div><h2>${esc(subj)} 기초 개념 카드</h2><span class="sub">기출 ${(window.KGS_CONCEPTS.subjects[subj] || {}).rounds}회분 ${esc(subj)} ${(window.KGS_CONCEPTS.subjects[subj] || {}).totalItems}문항을 개념별로 나눠 자주 나온 순서로 · 하루 3장</span></div><button class="btn ghost" data-act="go" data-v="practice">문제 풀기로</button></div>
+      ${plan.map(d => `<div class="rec"><div><b>${d.day}일차</b><div class="chips">${d.ids.map(id => { const c = cardById(id), r = cs.byCard.get(id); return `<button class="chip ${r.studied ? 'done' : ''}" data-act="card" data-id="${id}">${r.studied ? '✓ ' : ''}${esc(c.title)}<small>${c.freq.rounds}회</small></button>`; }).join('')}</div></div></div>`).join('')}</section>
+      ${conceptEffectHtml(false, subj)}`;
+  }
+  function conceptHtml() {
+    const c = cardById(app.viewArg); if (!c) { app.view = 'concepts'; return conceptsHtml(); }
+    const r = cStats().byCard.get(c.id); const ci = K.conceptItems(c, app.bank);
+    const seq = cPlan(c.subject).flatMap(d => d.ids); const at = seq.indexOf(c.id); const day = Math.floor(at / 3) + 1;
+    const f = c.formula;
+    const pre = (c.prereq || []).map(cardById).filter(Boolean);
+    const recent = c.items.slice(0, 4).map(itemLabel).join(' · ');
+    return `<section class="study"><div class="studyhead">${app.back ? '<button class="btn ghost" data-act="cardback">풀던 문제로</button>' : `<button class="btn ghost" data-act="cards" data-s="${esc(c.subject)}">카드 목록</button>`}<div><b>${day}일차 · ${at % 3 + 1}/3</b><div class="tiny muted">${esc(c.subject)} · ${esc(c.group)}</div></div><span></span></div>
+      <article class="card ccard">
+        <div class="eyebrow">기출 빈도 ${c.rank}위 · 37회 중 ${c.freq.rounds}회 출제 (${c.freq.items}문항)</div>
+        <h2>${esc(c.title)}</h2>
+        <div class="cfigwrap">${c.fig}</div>
+        <p class="one">${esc(c.one)}</p>
+        ${f ? `<div class="formula">${f.lines.map(l => `<div class="fl1">${esc(l)}</div>`).join('')}
+          ${f.symbols.length ? `<table class="syms"><thead><tr><th>기호</th><th>뜻</th><th>단위</th></tr></thead><tbody>${f.symbols.map(([a, b, u]) => `<tr><td><b>${esc(a)}</b></td><td>${esc(b)}</td><td class="muted">${esc(u)}</td></tr>`).join('')}</tbody></table>` : ''}
+          <p class="when"><b>언제 쓰나</b> ${esc(f.when)}</p></div>` : ''}
+        ${c.words.length ? `<div class="words"><div class="eyebrow">해설에 나오는 말</div><dl>${c.words.map(([a, b]) => `<dt>${esc(a)}</dt><dd>${esc(b)}</dd>`).join('')}</dl></div>` : ''}
+        ${pre.length ? `<p class="tiny muted">먼저 보면 좋은 카드: ${pre.map(p => `<button class="link" data-act="card" data-id="${p.id}">${esc(p.title)}</button>`).join(' ')}</p>` : ''}
+        <p class="tiny muted">최근 출제: ${esc(recent)}${c.items.length > 4 ? ' 외' : ''}</p>
+        ${canEdit() && c.verify ? `<p class="tiny warn">설계자 확인: ${esc(c.verify)}</p>` : ''}
+      </article>
+      <section class="card"><div class="row-between"><div><b>${ci.check.length ? `확인 문제 ${ci.check.length}개` : '카드 학습'}</b><p class="reason tiny muted">${ci.check.length ? `이 개념이 나온 ${esc(app.bank.title)} 기출로 바로 확인해요${ci.related.length ? ` · 이어서 관련 기출 ${ci.related.length}문항` : ''}` : `지금 문제은행(${esc(app.bank.title)})에는 이 개념 문항이 없어요. 다른 회차가 추가되면 자동으로 이어집니다.`}</p>
+        <p class="tiny muted">카드 학습 ${r.studyCount}회 · 보기 전 첫 제출 ${r.before.n ? `${r.before.c}/${r.before.n}` : '—'} · 본 뒤 ${r.after.n ? `${r.after.c}/${r.after.n}` : '—'}</p></div>
+        <button class="btn primary big" data-act="cardstudy" data-id="${c.id}">${ci.check.length ? '확인 문제 풀기' : '카드 다 봤어요'}</button></div></section>
+      <div class="actionbar"><button class="btn icon" data-act="card" data-id="${seq[at - 1] || ''}" aria-label="이전 카드" ${at > 0 ? '' : 'disabled'}><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><span class="grow tiny muted" style="text-align:center">${at + 1} / ${seq.length}장</span><button class="btn icon" data-act="card" data-id="${seq[at + 1] || ''}" aria-label="다음 카드" ${at + 1 < seq.length ? '' : 'disabled'}><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button></div>
+    </section>`;
+  }
+  function studyCard(id) {
+    const c = cardById(id); if (!c) return;
+    const ci = K.conceptItems(c, app.bank);
+    const extra = { concept: c.id };
+    app.back = null;
+    if (ci.check.length) { startSession('concept', `개념 · ${c.title}`, ci.check, null, extra); return; }
+    addEvent('session', Object.assign({ mode: 'concept', label: `개념 · ${c.title}`, items: [], roundKey: null, stage: '필기' }, extra));
+    const next = K.conceptToday(cPlan(c.subject), cStats());
+    toast('카드 학습을 기록했어요', 'ok');
+    if (next) { app.viewArg = next.left[0]; app.view = 'concept'; } else { app.view = 'concepts'; app.viewArg = c.subject; }
+    render(); window.scrollTo(0, 0);
   }
 
   // ---------- 기록 ----------
@@ -560,7 +667,7 @@
     const b = e.target.closest('[data-act]'); if (!b || b.tagName === 'INPUT') return;
     const act = b.dataset.act;
     try {
-      if (act === 'go') { if (b.dataset.v === 'learners' && app.watch && app.watch.list) loadLearnerEvents(); app.view = b.dataset.v; app.viewArg = null; if (b.dataset.v !== 'study') app.study = app.view === 'study' ? app.study : null; render(); window.scrollTo(0, 0); }
+      if (act === 'go') { app.back = null; if (b.dataset.v === 'learners' && app.watch && app.watch.list) loadLearnerEvents(); app.view = b.dataset.v; app.viewArg = null; if (b.dataset.v !== 'study') app.study = app.view === 'study' ? app.study : null; render(); window.scrollTo(0, 0); }
       else if (act === 'local') { await startAccount('local', { id: 'local' }); }
       else if (act === 'signup') { const f = $('#loginForm'); if (!f.reportValidity()) return; const fd = new FormData(f); const { error } = await app.sb.auth.signUp({ email: fd.get('email'), password: fd.get('password'), options: { emailRedirectTo: location.href.split('#')[0] } }); $('#loginMsg').textContent = error ? (/Database error|KGS_NOT_ALLOWED|not allowed/i.test(error.message) ? '가입할 수 없는 이메일입니다. 등록된 이메일만 가입할 수 있어요.' : '가입 실패: ' + error.message) : '가입 요청 완료. 메일의 확인 링크를 누른 뒤 로그인하세요.'; }
       else if (act === 'sync') { kick(); }
@@ -583,6 +690,11 @@
       else if (act === 'export') { exportBackup(); }
       else if (act === 'reloadbank') { await loadBank(app.gen); render(); }
       else if (act === 'watchreload') { if (app.watch && app.watch.list) loadLearnerEvents(); else { app.watch = null; render(); } }
+      else if (act === 'card') { if (!b.dataset.id) return; if (b.dataset.from === 'study' && app.study) app.back = { sessionId: app.study.sessionId, idx: app.study.idx }; else if (app.view !== 'concept') app.back = null; app.view = 'concept'; app.viewArg = b.dataset.id; render(); window.scrollTo(0, 0); }
+      else if (act === 'cards') { app.back = null; app.view = 'concepts'; app.viewArg = b.dataset.s || null; render(); window.scrollTo(0, 0); }
+      else if (act === 'cardstudy') { studyCard(b.dataset.id); }
+      else if (act === 'cardback') { const bk = app.back; app.back = null; if (bk) openSession(bk.sessionId, bk.idx); }
+      else if (act === 'cardrel') { const c = cardById(b.dataset.id); const s = curSession(); const ids = K.conceptItems(c, app.bank).related.filter(id => !s || !s.items.includes(id)); if (s) addEvent('session_end', { session: s.id, reason: 'done' }); startSession('concept', `관련 기출 · ${c.title}`, ids, null, { concept: c.id, part: 'related' }); }
       else if (act === 'keyfilter') { app.viewArg = b.dataset.f; render(); }
       else if (act === 'logout' || act === 'logoutwipe') { await logout(act === 'logoutwipe'); }
     } catch (err) { console.error(err); toast(String(err.message || err), 'bad'); }

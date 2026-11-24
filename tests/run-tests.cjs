@@ -255,6 +255,67 @@ async function test(name, fn) { try { await fn(); results.push(['통과', name])
     assert.strictEqual(Object.keys(s.state.events).length, 0);
   });
 
+  // ===== 개념 카드 (추가 기능 — 기존 통계를 바꾸지 않아야 함) =====
+  const CONCEPTS = require('../concepts.js');
+  const CARDS = K.conceptCards(CONCEPTS, '건축구조');
+  await test('개념 카드 데이터: 건축구조 카드 40~60장, id 고유, 그림·한 줄 설명, 수식이면 기호·단위·언제', async () => {
+    assert.ok(CARDS.length >= 40 && CARDS.length <= 60, CARDS.length);
+    assert.strictEqual(new Set(CARDS.map(c => c.id)).size, CARDS.length);
+    const all = new Set();
+    for (const c of CARDS) {
+      assert.ok(c.title && c.one && /^<svg /.test(c.fig), c.id);
+      assert.strictEqual(c.subject, '건축구조');
+      if (c.formula) { assert.ok(c.formula.lines.length && c.formula.when, c.id); c.formula.symbols.forEach(s => assert.strictEqual(s.length, 3, c.id)); }
+      (c.prereq || []).forEach(p => assert.ok(CARDS.some(x => x.id === p), c.id + ' prereq ' + p));
+      c.items.forEach(i => { assert.match(i, /^P-20\d\d-\d-0(4\d|5\d|60)$/); assert.ok(!all.has(i), '대표 개념은 문항당 1개 ' + i); all.add(i); });
+    }
+    for (let n = 41; n <= 60; n++) assert.ok(all.has(ID(n)), '2026-1 구조 문항은 모두 카드에 연결 ' + n);
+    assert.ok(!all.has(ID(40)) && !all.has(ID(61)), '구조 과목 문항만');
+  });
+  await test('개념 카드: 하루 3장 묶음 · 먼저 볼 카드가 앞에 · 모든 카드 한 번씩', async () => {
+    const plan = K.conceptPlan(CARDS, 3); const seq = plan.flatMap(d => d.ids);
+    assert.strictEqual(seq.length, CARDS.length); assert.strictEqual(new Set(seq).size, CARDS.length);
+    assert.ok(plan.every(d => d.ids.length <= 3));
+    for (const c of CARDS) for (const p of c.prereq || []) assert.ok(seq.indexOf(p) < seq.indexOf(c.id), `${p} → ${c.id}`);
+  });
+  await test('개념 카드: 확인 문제는 채점 가능한 은행 문항만(검토대기 56번 제외), 틀린 문항에서 관련 카드 찾기', async () => {
+    const dist = CARDS.find(c => c.items.includes(ID(42)));
+    const ci = K.conceptItems(dist, BANK);
+    assert.ok(ci.check.includes(ID(42)) && !ci.check.includes(ID(56)), '56번은 검토대기라 제외');
+    assert.ok(K.conceptsOfItem(CARDS, ID(42))[0].main);
+    assert.strictEqual(K.conceptItems(CARDS.find(c => !c.items.some(i => i.startsWith('P-2026-1'))), BANK).check.length, 0);
+  });
+  await test('개념 카드: 카드 학습 → 카드 전/후 정답 따로 집계, 과목 통계·회차·이어 풀기는 그대로', async () => {
+    const s2 = new FakeServer(); const d = new Device('pc', s2); d.login('husband');
+    const r = d.startRound(); // 구조 41·42번을 먼저 틀림
+    d.submit(r.id, 41, wrong(41)); d.submit(r.id, 42, wrong(42));
+    const before = d.stats(); const keyBefore = statsKey(before);
+    const card = CARDS.find(c => c.items.includes(ID(42)));
+    const { check } = K.conceptItems(card, BANK);
+    // 카드 학습 = 기존 session 사건(mode concept)
+    const cs = d.add('session', { mode: 'concept', concept: card.id, label: '개념 · ' + card.title, items: check, roundKey: null, stage: '필기' });
+    const st0 = K.conceptStats(CARDS, BANK, d.store.state.events);
+    assert.strictEqual(statsKey(d.stats()), keyBefore, '카드를 열기만 해서는 과목 통계 불변');
+    assert.strictEqual(d.stats().active.id, cs.id, '확인 문제가 있으면 이어 풀기 대상');
+    assert.strictEqual(st0.byCard.get(card.id).studied, true);
+    assert.deepStrictEqual(st0.byCard.get(card.id).before, { n: 1, c: 0 });
+    d.submit(cs.id, 42, right(42), { mode: 'concept' });
+    const st1 = K.conceptStats(CARDS, BANK, d.store.state.events).byCard.get(card.id);
+    assert.deepStrictEqual(st1.after, { n: 1, c: 1 }, '카드 후 첫 제출 정답');
+    assert.deepStrictEqual(st1.first, { n: 1, c: 0 }, '첫 풀이 성적은 당시 값(오답) 보존');
+    const S = d.stats().subjects.find(x => x.subject === '건축구조');
+    assert.strictEqual(S.firstCorrect, 0); assert.strictEqual(S.vol.all.review, 1); assert.strictEqual(S.retryCorrect, 1, '복습 성과에 반영');
+    assert.strictEqual(d.stats().doneRounds.length + d.stats().progressRounds.length, 1, '회차 표에는 회차만');
+    await d.sync.syncNow(); assert.ok(s2.rows.some(x => x.kind === 'session' && x.data.mode === 'concept'), '기존 사건 종류로 서버 저장(서버 변경 없음)');
+    // 확인 문제 없는 카드(은행에 문항 없음)도 학습 기록 가능, 이어 풀기는 회차 그대로
+    const none = CARDS.find(c => !K.conceptItems(c, BANK).check.length);
+    d.add('session', { mode: 'concept', concept: none.id, label: 'x', items: [], roundKey: null, stage: '필기' });
+    assert.strictEqual(d.stats().active.id, r.id, "확인 문제를 다 풀면 이어 풀기는 회차로 돌아감");
+    assert.strictEqual(K.conceptStats(CARDS, BANK, d.store.state.events).studiedCount, 2);
+    const today = K.conceptToday(K.conceptPlan(CARDS, 3), K.conceptStats(CARDS, BANK, d.store.state.events));
+    assert.ok(today && today.left.length >= 1);
+  });
+
   // ===== 실제 문제은행 파일이 있으면 구조 검사 =====
   const real = path.join(__dirname, '..', 'private', 'pilgi-2026-1.json');
   if (fs.existsSync(real)) await test('문제은행(2026-1): 100문항, ID 고유, 대조완료는 정답 1~4, 원문 쪽 기록', async () => {

@@ -6,14 +6,15 @@
 
 | 폴더 | 내용 | 공개 여부 |
 |---|---|---|
-| 저장소 맨 위 | 앱 화면 파일 5개 (`index.html`, `app.js`, `core.js`, `config.js`, `sw.js`) | 공개 (교재 내용 없음) |
+| 저장소 맨 위 | 앱 화면 파일 6개 (`index.html`, `app.js`, `core.js`, `concepts.js`, `config.js`, `sw.js`) | 공개 (교재 내용 없음 — `concepts.js`는 직접 쓴 개념 카드 + 문항 번호만) |
 | `private/pilgi-2026-1.json` | 문제은행 (2026년 1회 100문항: 문제·보기·그림·정답·해설 이미지) | **비공개.** GitHub·공개 사이트에 올리지 말 것 |
 | `private/2026-1회-정답대조표.csv` | 문항별 정답·상태·원문 쪽 번호 (엑셀로 열림) | 비공개 |
 | `server/001_kgs_schema.sql` | 서버에 새 표 3개 + 접근 규칙 추가 (기존 v6 표는 건드리지 않음) | 승인 후 실행 |
 | `server/002_check_readonly.sql` | 읽기만 하는 서버 상태 점검 | 언제든 실행 가능 |
 | `server/003_admin_role.sql` | 최고관리자(admin): 학습자 기록 읽기 전용 + 정답 대조 | 적용됨 |
 | `server/004_signup_allowlist.sql` | 가입 허용 목록: 목록 이메일만 가입, 가입 시 역할 자동 지정 | 적용됨 |
-| `tools/` | 문제집·해설집 PDF에서 문제은행을 만드는 스크립트 | 개발용 |
+| `tools/` | 문제집·해설집 PDF에서 문제은행을 만드는 스크립트, 개념 카드 원본·분류표(`concept_*.py`, `build_concepts.py`) | 개발용 |
+| `private/구조-개념분류표.csv` | 기출 37회분 건축구조 740문항의 자동 개념 분류 결과(엑셀로 열림) | 비공개 |
 | `tests/` | 자동 테스트 (논리 · 브라우저 · SQL) | 개발용 |
 
 ## 2. 지금 바로 써 보기 (서버 없이, 이 기기에서만)
@@ -34,7 +35,7 @@
 3. **표 만들기**: SQL Editor에서 `server/001_kgs_schema.sql` 실행.
 4. **문제은행 올리기**: Storage → `kgs-bank` 보관함(비공개) → `private/pilgi-2026-1.json`을 이름 그대로 업로드.
 5. **주소·키 넣기**: `app/config.js`에 Project URL과 **publishable(anon) 키**를 넣습니다. (service_role·secret 키는 절대 넣지 않음)
-6. **배포**: GitHub 저장소에 `v7/` 폴더를 만들고 `app/`의 파일 5개만 올립니다. → `https://chlwjdgns302-beep.github.io/study-dashboard/v7/`
+6. **배포**: GitHub 저장소에 `v7/` 폴더를 만들고 `app/`의 파일 6개만 올립니다. → `https://chlwjdgns302-beep.github.io/study-dashboard/v7/`
 7. **Auth 설정**: Authentication → URL Configuration에 위 v7 주소를 Redirect URL로 추가합니다.
 8. **계정**: 남편 계정과 진영님 계정을 앱에서 가입(메일 확인)한 뒤, `001` 파일 맨 아래 예시 SQL로 남편=learner, 진영님=editor를 등록합니다. 다 만든 뒤에는 Authentication 설정에서 새 가입을 꺼 두는 것을 권합니다.
 9. **서버 접근 점검**: 진영님 계정으로 로그인 → 설정 → **서버 접근 점검**. 등록하지 않은 점검용 계정(B)을 하나 만들어 넣으면, 다른 계정·비로그인이 남편 기록과 문제은행에 접근하지 못하는지 15가지를 확인합니다. 모두 ✔ 여야 합니다.
@@ -97,3 +98,16 @@ PGHOST=... sh tests/sql/run-sql-test.sh  # PostgreSQL 16에서 서버 SQL·RLS (
 | editor | 정답 대조, 서버 접근 점검 (학습자 기록은 못 봄) |
 
 어느 역할도 다른 사람의 기록을 고치거나 지울 수 없습니다. 미등록 계정은 문제은행과 어떤 기록도 볼 수 없습니다.
+
+## 9. 건축구조 기초 개념 카드 (2026-11-24 추가)
+
+의도 문서: 프로젝트 `docs/intent/건축구조-기초보강.md`.
+
+- **흐름**: 용어·수식 카드(그림 1장 + 한 줄 설명 + 기호·단위·언제 쓰나 + 해설에 나오는 말) → 쉬운 확인 문제 → 관련 기출. 하루 3장(약 30분), 51장 = 17일.
+- **카드 순서**: 기출 37회분 건축구조 740문항을 키워드로 개념별 분류(690문항이 카드 개념에 연결) → 자주 나온 순서. 먼저 알아야 할 카드(예: 반력 → 휨모멘트)는 앞으로 당김.
+- **기록**: 카드 학습 = 기존 `session` 사건(`mode: 'concept'`). **서버 표·SQL 변경 없음.** 확인 문제 풀이는 일반 제출이라 과목 통계에 그대로 들어가고, 첫 풀이 정답률은 처음 값이 보존됩니다.
+- **대시보드**: 홈 '오늘 공부할 것'에 N일차 카드, '개념 카드 학습 효과'에 카드를 본 개념의 기출 정답(보기 전 첫 제출 → 본 뒤 첫 제출).
+- **틀린 문항 → 카드**: 풀이 결과 아래 '관련 개념 카드' 버튼, 카드에서 '풀던 문제로' 복귀.
+- **한계**: 확인 문제는 정답 대조가 끝난 문항만 쓰므로, 지금은 2026년 1회 구조 20문항(17개 카드)만 연결됩니다. 다른 회차 필기 해설집이 들어오면 같은 카드에 자동 연결됩니다.
+- **다시 만들기**: `python3 -I tools/build_concepts.py private/pilgi-book.txt concepts.js private/구조-개념분류표.csv` (카드 내용은 `tools/concept_cards_structure.py`, 분류 키워드·수동 보정은 `tools/concept_taxonomy_structure.py`의 `OVERRIDE`). 다른 과목은 같은 모양의 파일 2개를 추가하면 화면이 자동으로 생깁니다.
+- e2e 테스트는 실제 문제은행 대신 `KGS_BANK=/경로/test-bank.json`으로 돌릴 수 있습니다.

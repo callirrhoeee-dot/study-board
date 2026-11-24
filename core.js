@@ -48,7 +48,7 @@
   function sessionsOf(evs) {
     const map = new Map();
     for (const e of evs) {
-      if (e.kind === 'session') map.set(e.id, { id: e.id, at: e.at, mode: e.data.mode, label: e.data.label, roundKey: e.data.roundKey || null, items: e.data.items, ended: false, answers: new Map(), lastPos: null });
+      if (e.kind === 'session') map.set(e.id, { id: e.id, at: e.at, mode: e.data.mode, label: e.data.label, roundKey: e.data.roundKey || null, concept: e.data.concept || null, items: e.data.items, ended: false, answers: new Map(), lastPos: null });
     }
     for (const e of evs) {
       const s = e.data && map.get(e.data.session);
@@ -248,6 +248,83 @@
     return out;
   }
 
+  // ---------- 개념 카드 (과목에 묶이지 않음 · 기존 기록 방식 그대로) ----------
+  /* 카드 학습 = 기존 'session' 사건(mode 'concept', data.concept = 카드 id). 새 사건 종류나 서버 변경이 없다.
+   * 확인 문제 풀이는 보통 'attempt'로 쌓여 과목 통계에도 그대로 들어간다(어느 경로로 풀어도 같은 문항 이력). */
+  function conceptCards(concepts, subject) {
+    const S = concepts && concepts.subjects && concepts.subjects[subject];
+    return S ? S.cards : [];
+  }
+  function allConceptCards(concepts) {
+    if (!concepts || !concepts.subjects) return [];
+    return Object.keys(concepts.subjects).reduce((a, k) => a.concat(concepts.subjects[k].cards), []);
+  }
+  /** 하루 묶음: 기출 빈도 순서대로 perDay장씩. 먼저 알아야 할 카드(prereq)가 뒤에 있으면 앞으로 당긴다. */
+  function conceptPlan(cards, perDay) {
+    perDay = perDay || 3;
+    const byId = new Map(cards.map(c => [c.id, c]));
+    const seq = [], seen = new Set();
+    const put = (c, depth) => {
+      if (!c || seen.has(c.id) || depth > 8) return;
+      (c.prereq || []).forEach(p => put(byId.get(p), depth + 1));
+      if (!seen.has(c.id)) { seen.add(c.id); seq.push(c.id); }
+    };
+    cards.slice().sort((a, b) => (a.rank || 0) - (b.rank || 0)).forEach(c => put(c, 0));
+    const days = [];
+    for (let i = 0; i < seq.length; i += perDay) days.push({ day: days.length + 1, ids: seq.slice(i, i + perDay) });
+    return days;
+  }
+  /** 문항 → 관련 카드 (대표 개념 먼저, 함께 걸린 개념 뒤) */
+  function conceptsOfItem(cards, itemId) {
+    const main = cards.filter(c => c.items.includes(itemId)).map(c => ({ card: c, main: true }));
+    const also = cards.filter(c => (c.also || []).includes(itemId) && !c.items.includes(itemId)).map(c => ({ card: c, main: false }));
+    return main.concat(also);
+  }
+  const CALC = /구하면|얼마|값은|크기는|계산|산정/;
+  /** 카드 직후 확인 문제(쉬운 것 먼저 최대 max개) + 그 밖의 관련 기출. 채점 가능한 문항만. */
+  function conceptItems(card, bank, max) {
+    max = max || 3;
+    const main = card.items.filter(id => scorable(bank.byId[id]));
+    const also = (card.also || []).filter(id => scorable(bank.byId[id]) && !main.includes(id));
+    const easy = id => CALC.test(bank.byId[id].stem || '') ? 1 : 0;
+    const ordered = main.slice().sort((a, b) => easy(a) - easy(b) || (a < b ? -1 : 1));
+    return { check: ordered.slice(0, max), related: ordered.slice(max).concat(also), bankCount: main.length };
+  }
+  /** 카드별: 카드 학습 시점, 그 개념(대표) 문항의 '카드 보기 전 첫 제출' / '카드 본 뒤 첫 제출' 정답 수 */
+  function conceptStats(cards, bank, events) {
+    const evs = Array.isArray(events) ? events.slice().sort(cmpEv) : sortedEvents(events);
+    const studied = new Map();
+    for (const e of evs) {
+      if (e.kind !== 'session' || !e.data || e.data.mode !== 'concept' || !e.data.concept || e.data.part === 'related') continue; // 관련 기출 풀이는 카드 학습으로 세지 않음
+      const s = studied.get(e.data.concept) || { at: e.at, count: 0, last: e.at };
+      s.count++; s.last = e.at; studied.set(e.data.concept, s);
+    }
+    const hist = itemHistories(evs, bank);
+    const out = new Map();
+    for (const c of cards) {
+      const st = studied.get(c.id) || null; const T = st && st.at;
+      const r = { id: c.id, studied: !!st, studiedAt: T, studyCount: st ? st.count : 0, inBank: 0, first: { n: 0, c: 0 }, before: { n: 0, c: 0 }, after: { n: 0, c: 0 } };
+      for (const id of c.items) {
+        if (!scorable(bank.byId[id])) continue;
+        r.inBank++;
+        const list = hist.get(id); if (!list) continue;
+        r.first.n++; if (isCorrect(list[0], bank)) r.first.c++;
+        const b = T ? list.find(e => e.at < T) : null;
+        const a = T ? list.find(e => e.at >= T) : null;
+        if (b) { r.before.n++; if (isCorrect(b, bank)) r.before.c++; }
+        if (a) { r.after.n++; if (isCorrect(a, bank)) r.after.c++; }
+      }
+      out.set(c.id, r);
+    }
+    const sum = k => [...out.values()].filter(r => r.studied).reduce((a, r) => ({ n: a.n + r[k].n, c: a.c + r[k].c }), { n: 0, c: 0 });
+    return { byCard: out, studiedCount: [...out.values()].filter(r => r.studied).length, total: cards.length, before: sum('before'), after: sum('after') };
+  }
+  /** 오늘 볼 카드 묶음: 아직 안 본 카드가 있는 첫 날 */
+  function conceptToday(plan, cstats) {
+    for (const d of plan) { const left = d.ids.filter(id => !(cstats.byCard.get(id) || {}).studied); if (left.length) return { day: d.day, ids: d.ids, left }; }
+    return null;
+  }
+
   // ---------- 기기 저장소 (계정별 분리) ----------
   /* storage: localStorage 와 같은 getItem/setItem/removeItem 객체 */
   class LocalStore {
@@ -375,5 +452,6 @@
     }
   }
 
-  return { SUBJECTS, PASS, kstDate, addDays, uuid, effectiveBank, scorable, computeStats, recommend, quickSet, sessionsOf, resumeIndex, activeSession, currentStage, itemHistories, isCorrect, reviewState, LocalStore, SyncEngine, makeEvent, sortedEvents, cmpEv };
+  return { conceptCards, allConceptCards, conceptPlan, conceptsOfItem, conceptItems, conceptStats, conceptToday,
+    SUBJECTS, PASS, kstDate, addDays, uuid, effectiveBank, scorable, computeStats, recommend, quickSet, sessionsOf, resumeIndex, activeSession, currentStage, itemHistories, isCorrect, reviewState, LocalStore, SyncEngine, makeEvent, sortedEvents, cmpEv };
 });
